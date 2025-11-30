@@ -12,8 +12,6 @@ import characteranimation
 import healthbar
 import dogminigame
 
-print('hello')
-
 # HOW MANY SCENES TOTAL (EASY TO EXPAND)
 NUM_SCENES = 3   # scenes: 1, 2, 3 looping in a circle
 
