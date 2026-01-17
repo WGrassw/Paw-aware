@@ -4,7 +4,7 @@ import pygame
 import math
 
 
-def run_maze_minigame(window_size=(1200, 800), caption="Maze Minigame"):
+def run_maze_minigame(window_size=(1200, 800), caption="Maze Minigame", level=1):
     WINDOW_W, WINDOW_H = window_size
     screen = pygame.display.set_mode((WINDOW_W, WINDOW_H))
     pygame.display.set_caption(caption)
@@ -60,10 +60,26 @@ def run_maze_minigame(window_size=(1200, 800), caption="Maze Minigame"):
     FLOOR = 0
 
     # =========================
+    # Level scaling
+    # =========================
+    # Timer: level 1 is 90s (1 min 30s), +15s each level
+    level_time_limit_s = 90 + (max(1, int(level)) - 1) * 15
+
+    # Beacon width: smaller at level 1 (about 2/3 smaller than before),
+    # then increases per level, capped to stay passable.
+    # This controls the surveillance cone half-angle (wider cone = harder).
+    BASE_HALF_ANGLE_DEG = 6            # was 18; now ~2/3 smaller at level 1
+    HALF_ANGLE_GROW_PER_LEVEL = 3
+    MAX_HALF_ANGLE_DEG = 45
+
+    scaled_half_angle_deg = BASE_HALF_ANGLE_DEG + (max(1, int(level)) - 1) * HALF_ANGLE_GROW_PER_LEVEL
+    scaled_half_angle_deg = min(MAX_HALF_ANGLE_DEG, scaled_half_angle_deg)
+
+    # =========================
     # Surveillance spotlight (lighthouse beam)
     # =========================
     SPOTLIGHT_RANGE_PX = 720
-    SPOTLIGHT_HALF_ANGLE_DEG = 18
+    SPOTLIGHT_HALF_ANGLE_DEG = scaled_half_angle_deg
     SPOTLIGHT_SPEED_DEG_PER_SEC = 20
     SPOTLIGHT_COLOR = (230, 230, 200)
     SPOTLIGHT_MAX_ALPHA = 70
@@ -189,9 +205,7 @@ def run_maze_minigame(window_size=(1200, 800), caption="Maze Minigame"):
 
         surface.blit(cone_surf, (0, 0), special_flags=pygame.BLEND_RGBA_ADD)
 
-    # =========================
     # Setup
-    # =========================
     rng = random.Random()
     grid = generate_maze(MAZE_W, MAZE_H, rng)
     start = (1, 1)
@@ -240,7 +254,7 @@ def run_maze_minigame(window_size=(1200, 800), caption="Maze Minigame"):
     font = pygame.font.SysFont(None, 34)
 
     # Load + scale player sprite (cat head) to match old circle size
-    cat_img_raw = pygame.image.load("cathead.png").convert_alpha()
+    cat_img_raw = pygame.image.load("cathead maze.png").convert_alpha()
     PLAYER_SPRITE_SIZE = int(CELL_SIZE * 1.2)  # roughly matches old circle diameter
     cat_img = pygame.transform.smoothscale(cat_img_raw, (PLAYER_SPRITE_SIZE, PLAYER_SPRITE_SIZE))
 
@@ -267,6 +281,9 @@ def run_maze_minigame(window_size=(1200, 800), caption="Maze Minigame"):
     spotlight_angle = rng.random() * math.tau
     spotlight_speed = math.radians(SPOTLIGHT_SPEED_DEG_PER_SEC)
     spotlight_half_angle = math.radians(SPOTLIGHT_HALF_ANGLE_DEG)
+
+    # Timer start
+    start_ms = pygame.time.get_ticks()
 
     # =========================
     # Loop
@@ -328,6 +345,19 @@ def run_maze_minigame(window_size=(1200, 800), caption="Maze Minigame"):
                 )
                 return "lose_half"
 
+        # Timer check
+        elapsed_s = (pygame.time.get_ticks() - start_ms) / 1000.0
+        remaining_s = int(math.ceil(level_time_limit_s - elapsed_s))
+        if remaining_s <= 0:
+            show_result_screen(
+                [
+                    "TIME'S UP!",
+                    "Returning to the lobby..."
+                ],
+                delay_ms=1100
+            )
+            return "lose"
+
         # Win condition
         if (px, py) == exit_pos:
             show_result_screen(
@@ -356,10 +386,6 @@ def run_maze_minigame(window_size=(1200, 800), caption="Maze Minigame"):
 
         pygame.draw.rect(screen, EXIT_COLOR, tile_rect(ex, ey).inflate(-10, -10), border_radius=7)
 
-        # Draw player as cat sprite (same size)
-        cat_rect = cat_img.get_rect(center=(player_cx, player_cy))
-        screen.blit(cat_img, cat_rect)
-
         # Lighting base
         outside_darkness.fill((0, 0, 0, DARKNESS_ALPHA))
 
@@ -384,6 +410,10 @@ def run_maze_minigame(window_size=(1200, 800), caption="Maze Minigame"):
         )
         screen.blit(inside_darkness, (0, 0))
 
+        # Draw player as cat sprite AFTER darkness so it doesn't get greyed out
+        cat_rect = cat_img.get_rect(center=(player_cx, player_cy))
+        screen.blit(cat_img, cat_rect)
+
         # Spotlight beam
         draw_spotlight(screen, spotlight_origin, spotlight_angle)
 
@@ -407,5 +437,11 @@ def run_maze_minigame(window_size=(1200, 800), caption="Maze Minigame"):
             True, (235, 235, 235)
         )
         screen.blit(msg, (14, 14))
+
+        info = ui_font.render(
+            f"Level: {int(level)}    Time: {remaining_s}s",
+            True, (235, 235, 235)
+        )
+        screen.blit(info, (14, 14 + 28 + 6))
 
         pygame.display.flip()
