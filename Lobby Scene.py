@@ -1,3 +1,16 @@
+# lobby.py
+#
+# Scenes:
+# 1: lobbybackground1 + Match-3 encounter icon (20% chance on entry)
+# 2: lobbybackground2 + Dog encounter icon (40% chance on entry)
+# 3: lobbybackground3 + Maze encounter icon (20% chance on entry)
+# 4: lobbybackground4 + Jumpers encounter icon (card.png) (40% chance on entry)
+# 5: lobbybackground5 final scene, ONLY appears when dog, maze, match3 levels are all >= 2
+#
+# IMPORTANT:
+# - While quest_phase == 0 (Explore all available scenes), NO challenges appear at all.
+# - After exploring is completed (quest_phase becomes 1), challenges can appear.
+
 import pygame
 import random
 from sys import exit
@@ -13,10 +26,9 @@ import characteranimation
 import healthbar
 import dogminigame
 import maze_minigame
+import jump_charge_minigame  # Jumpers
 
-# =========================
-# LOAD Match-Three minigame module
-# =========================
+
 def load_match3_module():
     filename = "candy crush minigame.py"
     path = os.path.join(os.path.dirname(__file__), filename)
@@ -25,10 +37,8 @@ def load_match3_module():
     spec.loader.exec_module(mod)
     return mod
 
-match3_minigame = load_match3_module()
 
-# HOW MANY SCENES TOTAL
-NUM_SCENES = 3
+match3_minigame = load_match3_module()
 
 # LOAD ASSETS
 background1 = pygame.image.load("lobbybackground1.jpg").convert_alpha()
@@ -40,6 +50,11 @@ threat_minigame_base = pygame.image.load("threat minigame symbol.png").convert_a
 background3 = pygame.image.load("lobbybackground3.jpg").convert_alpha()
 maze_icon = pygame.image.load("maze_symbol.png").convert_alpha()
 
+background4 = pygame.image.load("lobbybackground4.jpg").convert_alpha()
+card_icon = pygame.image.load("card.png").convert_alpha()
+
+background5 = pygame.image.load("lobbybackground5.jpg").convert_alpha()
+
 # GAME STATE
 currentscene = 2
 prev_scene = currentscene
@@ -50,10 +65,9 @@ health = 9
 dog_level = 1
 maze_level = 1
 match3_level = 1
+jump_level = 1  # Jumpers
 
-# -------------------------
 # QUEST SYSTEM
-# -------------------------
 quest_font = pygame.font.SysFont(None, 26)
 quest_title_font = pygame.font.SysFont(None, 28)
 
@@ -66,32 +80,94 @@ WHITE = (235, 235, 235)
 TITLE_WHITE = (245, 245, 245)
 GREEN = (120, 255, 120)
 
-quest_phase = 0
+quest_phase = 0  # 0 = explore, 1 = challenges allowed + level quests
 quest_level = 1
 
 visited_scenes = set()
 visited_scenes.add(currentscene)
 
+# Final scene story text
+story_font = pygame.font.SysFont(None, 30)
+story_font_small = pygame.font.SysFont(None, 24)
+STORY_TEXT_COLOR = (245, 245, 245)
+
+LEFT_EDGE = 0
+RIGHT_EDGE = 900
+SAFE_MARGIN = 20
+
+scene_switch_lock_until_ms = 0
+SCENE_SWITCH_LOCK_MS = 220
+
+
+def clamp_health():
+    global health
+    health = max(0, health)
+
+
+def apply_full_heart_damage():
+    global health
+    health -= 1
+    clamp_health()
+
+
+def is_final_scene_unlocked():
+    # Scene 5 unlock condition as requested (only these three)
+    return (dog_level >= 2) and (maze_level >= 2) and (match3_level >= 2)
+
+
+def available_scene_count():
+    return 5 if is_final_scene_unlocked() else 4
+
+
+def next_scene(scene_id: int) -> int:
+    n = available_scene_count()
+    return (scene_id % n) + 1
+
+
+def prev_scene_id(scene_id: int) -> int:
+    n = available_scene_count()
+    return ((scene_id - 2) % n) + 1
+
+
 def maze_cleared_level():
     return max(0, int(maze_level) - 1)
+
 
 def dog_cleared_level():
     return max(0, int(dog_level) - 1)
 
+
 def match3_cleared_level():
     return max(0, int(match3_level) - 1)
 
+
+def jump_cleared_level():
+    return max(0, int(jump_level) - 1)
+
+
 def update_explore_all_scenes_quest():
     global quest_phase
-    if quest_phase == 0 and len(visited_scenes) >= NUM_SCENES:
-        quest_phase = 1
+    if quest_phase != 0:
+        return
+
+    needed = set(range(1, available_scene_count() + 1))
+    if needed.issubset(visited_scenes):
+        quest_phase = 1  # challenges allowed now
+
 
 def sync_dual_quest_progress():
     global quest_level
     if quest_phase != 1:
         return
-    while quest_level <= min(maze_cleared_level(), dog_cleared_level(), match3_cleared_level()):
+
+    while quest_level <= min(
+        maze_cleared_level(),
+        dog_cleared_level(),
+        match3_cleared_level(),
+        jump_cleared_level(),
+    ):
         quest_level += 1
+
 
 def draw_quests(surface):
     title = "Quests"
@@ -101,12 +177,13 @@ def draw_quests(surface):
     colors = []
 
     if quest_phase == 0:
-        lines.append("-- Explore all scenes")
+        lines.append("-- Explore all available scenes")
         colors.append(WHITE)
     else:
         m_done = (maze_cleared_level() >= quest_level)
         d_done = (dog_cleared_level() >= quest_level)
         c_done = (match3_cleared_level() >= quest_level)
+        j_done = (jump_cleared_level() >= quest_level)
 
         lines.append(f"-- Complete Level {quest_level} of Maze")
         colors.append(GREEN if m_done else WHITE)
@@ -116,6 +193,9 @@ def draw_quests(surface):
 
         lines.append(f"-- Complete Level {quest_level} of Match-Three")
         colors.append(GREEN if c_done else WHITE)
+
+        lines.append(f"-- Complete Level {quest_level} of Jumpers")
+        colors.append(GREEN if j_done else WHITE)
 
     line_surfs = [quest_font.render(lines[i], True, colors[i]) for i in range(len(lines))]
 
@@ -149,16 +229,58 @@ def draw_quests(surface):
         y += s.get_height() + QUEST_LINE_GAP
 
 
-# ============================================================
-# SWITCHED SCENES:
-# - Scene 1 now triggers Match-Three (food icon)
-# - Scene 2 now triggers Dog (threat icon)
-# - Scene 3 stays Maze
-# ============================================================
+def wrap_text_lines(text, font, max_width):
+    words = text.split(" ")
+    lines = []
+    cur = ""
+    for w in words:
+        test = (cur + " " + w).strip()
+        if font.size(test)[0] <= max_width:
+            cur = test
+        else:
+            if cur:
+                lines.append(cur)
+            cur = w
+    if cur:
+        lines.append(cur)
+    return lines
 
-# -------------------------
-# Match-Three encounter (Scene 1 ONLY) - uses food icon
-# -------------------------
+
+def draw_story_overlay_bottom(surface):
+    box_w = 1120
+    box_h = 160
+    box_x = (surface.get_width() - box_w) // 2
+    box_y = surface.get_height() - box_h - 24
+
+    overlay = pygame.Surface((box_w, box_h), pygame.SRCALPHA)
+    overlay.fill((0, 0, 0, 170))
+    surface.blit(overlay, (box_x, box_y))
+    pygame.draw.rect(surface, (240, 240, 240), (box_x, box_y, box_w, box_h), 2, border_radius=14)
+
+    main_text = (
+        "After surviving the streets, the cat can choose to continue to wander the streets "
+        "or become a rescue. The choice is yours."
+    )
+
+    hint_text = (
+        "Progress makes it easier to seek a home. "
+        "Complete more levels to weaken the final challenge."
+    )
+
+    lines_main = wrap_text_lines(main_text, story_font, box_w - 36)
+
+    y = box_y + 16
+    for ln in lines_main[:3]:
+        surface.blit(story_font.render(ln, True, STORY_TEXT_COLOR), (box_x + 18, y))
+        y += 32
+
+    y += 4
+    surface.blit(story_font_small.render(hint_text, True, (220, 220, 220)), (box_x + 18, y))
+
+
+# Encounter setup
+
+# Scene 1: Match-Three (20%)
 MATCH3_X = 435
 MATCH3_Y = 450
 match3_icon = food_minigame
@@ -170,14 +292,12 @@ match3_anim_start = 0
 
 MATCH3_DELAY = 2000
 MATCH3_GROW_DURATION = 850
-MATCH3_TRIGGER_CHANCE_ON_ENTRY = 0.30
+MATCH3_TRIGGER_CHANCE_ON_ENTRY = 0.20
 
 match3_rolled_this_visit = False
 match3_cleared_this_visit = False
 
-# -------------------------
-# DOG encounter (Scene 2 ONLY) - uses threat icon
-# -------------------------
+# Scene 2: Dog (40%)
 DOG_X = 435
 DOG_Y = 430
 DOG_W, DOG_H = threat_minigame_base.get_size()
@@ -188,14 +308,12 @@ dog_anim_start = 0
 
 DOG_DELAY = 2000
 DOG_GROW_DURATION = 850
-DOG_TRIGGER_CHANCE_ON_ENTRY = 0.20
+DOG_TRIGGER_CHANCE_ON_ENTRY = 0.40
 
 dog_rolled_this_visit = False
 dog_cleared_this_visit = False
 
-# -------------------------
-# Maze (Scene 3 ONLY)
-# -------------------------
+# Scene 3: Maze (20%)
 MAZE_X = 520
 MAZE_Y = 420
 MAZE_W, MAZE_H = maze_icon.get_size()
@@ -211,28 +329,26 @@ MAZE_TRIGGER_CHANCE_ON_ENTRY = 0.20
 maze_rolled_this_visit = False
 maze_cleared_this_visit = False
 
-# -------------------------
+# Scene 4: Jumpers (40%) using card.png
+JUMP_X = 430
+JUMP_Y = 350
+JUMP_W, JUMP_H = card_icon.get_size()
+
+jump_triggered = False
+jump_started = False
+jump_anim_start = 0
+
+JUMP_DELAY = 2000
+JUMP_GROW_DURATION = 850
+JUMP_TRIGGER_CHANCE_ON_ENTRY = 0.40
+
+jump_rolled_this_visit = False
+jump_cleared_this_visit = False
+
 # Return positioning
-# -------------------------
 return_scene = None
 return_player_x = None
 
-scene_switch_lock_until_ms = 0
-SCENE_SWITCH_LOCK_MS = 220
-
-LEFT_EDGE = 0
-RIGHT_EDGE = 900
-SAFE_MARGIN = 20
-
-
-def clamp_health():
-    global health
-    health = max(0, health)
-
-def apply_full_heart_damage():
-    global health
-    health -= 1
-    clamp_health()
 
 def begin_match3_sequence():
     global match3_triggered, match3_anim_start, match3_started
@@ -245,6 +361,7 @@ def begin_match3_sequence():
     return_scene = currentscene
     return_player_x = characteranimation.player_x
 
+
 def begin_dog_sequence():
     global dog_triggered, dog_anim_start, dog_started
     global return_scene, return_player_x
@@ -256,6 +373,7 @@ def begin_dog_sequence():
     return_scene = currentscene
     return_player_x = characteranimation.player_x
 
+
 def begin_maze_sequence():
     global maze_triggered, maze_anim_start, maze_started
     global return_scene, return_player_x
@@ -266,6 +384,19 @@ def begin_maze_sequence():
 
     return_scene = currentscene
     return_player_x = characteranimation.player_x
+
+
+def begin_jump_sequence():
+    global jump_triggered, jump_anim_start, jump_started
+    global return_scene, return_player_x
+
+    jump_triggered = True
+    jump_started = False
+    jump_anim_start = pygame.time.get_ticks()
+
+    return_scene = currentscene
+    return_player_x = characteranimation.player_x
+
 
 def restore_player_position_after_minigame():
     global currentscene, return_scene, return_player_x, prev_scene
@@ -289,9 +420,7 @@ def restore_player_position_after_minigame():
     return_player_x = None
 
 
-# =========================
 # MAIN LOOP
-# =========================
 while True:
     now_ms = pygame.time.get_ticks()
 
@@ -303,67 +432,74 @@ while True:
     keys = pygame.key.get_pressed()
     characteranimation.update_character_logic(keys)
 
-    # Scene switching is LOCKED while any encounter is active/enlarging
     can_switch = (
         not dog_triggered
         and not match3_triggered
         and not maze_triggered
+        and not jump_triggered
         and now_ms >= scene_switch_lock_until_ms
     )
 
     if can_switch:
         if characteranimation.player_x >= RIGHT_EDGE:
-            currentscene = (currentscene % NUM_SCENES) + 1
+            currentscene = next_scene(currentscene)
             characteranimation.player_x = LEFT_EDGE
         elif characteranimation.player_x <= LEFT_EDGE:
-            currentscene = (currentscene - 2) % NUM_SCENES + 1
+            currentscene = prev_scene_id(currentscene)
             characteranimation.player_x = RIGHT_EDGE
 
-    # Scene entry logic
+    if currentscene == 5 and not is_final_scene_unlocked():
+        currentscene = 4
+        prev_scene = 4
+        characteranimation.player_x = RIGHT_EDGE - 1
+
     if currentscene != prev_scene:
         visited_scenes.add(currentscene)
         update_explore_all_scenes_quest()
 
-        # Reset per-visit flags on leaving scenes
         if prev_scene == 1:
             match3_rolled_this_visit = False
             match3_cleared_this_visit = False
-
         if prev_scene == 2:
             dog_rolled_this_visit = False
             dog_cleared_this_visit = False
-
         if prev_scene == 3:
             maze_rolled_this_visit = False
             maze_cleared_this_visit = False
+        if prev_scene == 4:
+            jump_rolled_this_visit = False
+            jump_cleared_this_visit = False
 
-        # Roll encounters ONLY in their intended scene
-        if currentscene == 1 and not match3_rolled_this_visit and not match3_cleared_this_visit:
-            match3_rolled_this_visit = True
-            if random.random() < MATCH3_TRIGGER_CHANCE_ON_ENTRY:
-                begin_match3_sequence()
+        # No challenges during explore phase
+        if quest_phase == 1:
+            if currentscene == 1 and not match3_rolled_this_visit and not match3_cleared_this_visit:
+                match3_rolled_this_visit = True
+                if random.random() < MATCH3_TRIGGER_CHANCE_ON_ENTRY:
+                    begin_match3_sequence()
 
-        if currentscene == 2 and not dog_rolled_this_visit and not dog_cleared_this_visit:
-            dog_rolled_this_visit = True
-            if random.random() < DOG_TRIGGER_CHANCE_ON_ENTRY:
-                begin_dog_sequence()
+            if currentscene == 2 and not dog_rolled_this_visit and not dog_cleared_this_visit:
+                dog_rolled_this_visit = True
+                if random.random() < DOG_TRIGGER_CHANCE_ON_ENTRY:
+                    begin_dog_sequence()
 
-        if currentscene == 3 and not maze_rolled_this_visit and not maze_cleared_this_visit:
-            maze_rolled_this_visit = True
-            if random.random() < MAZE_TRIGGER_CHANCE_ON_ENTRY:
-                begin_maze_sequence()
+            if currentscene == 3 and not maze_rolled_this_visit and not maze_cleared_this_visit:
+                maze_rolled_this_visit = True
+                if random.random() < MAZE_TRIGGER_CHANCE_ON_ENTRY:
+                    begin_maze_sequence()
+
+            if currentscene == 4 and not jump_rolled_this_visit and not jump_cleared_this_visit:
+                jump_rolled_this_visit = True
+                if random.random() < JUMP_TRIGGER_CHANCE_ON_ENTRY:
+                    begin_jump_sequence()
 
         prev_scene = currentscene
 
     sync_dual_quest_progress()
 
-    # =========================
     # DRAW SCENES
-    # =========================
     if currentscene == 1:
         screen.blit(background1, (0, 0))
 
-        # Match-Three encounter appears/enlarges ONLY in background1 now
         if match3_triggered and not match3_cleared_this_visit:
             elapsed = now_ms - match3_anim_start
 
@@ -405,7 +541,6 @@ while True:
     elif currentscene == 2:
         screen.blit(background2, (0, 0))
 
-        # Dog encounter appears/enlarges ONLY in background2 now
         if dog_triggered and not dog_cleared_this_visit:
             elapsed = now_ms - dog_anim_start
 
@@ -489,7 +624,51 @@ while True:
                     screen = pygame.display.set_mode((1200, 800))
                     pygame.display.set_caption("Runner")
 
-    sync_dual_quest_progress()
+    elif currentscene == 4:
+        screen.blit(background4, (0, 0))
+
+        if jump_triggered and not jump_cleared_this_visit:
+            elapsed = now_ms - jump_anim_start
+
+            if elapsed < JUMP_DELAY:
+                screen.blit(card_icon, (JUMP_X, JUMP_Y))
+
+            elif elapsed < JUMP_DELAY + JUMP_GROW_DURATION:
+                t = (elapsed - JUMP_DELAY) / JUMP_GROW_DURATION
+                t = max(0.0, min(1.0, t))
+                t = 1 - (1 - t) ** 2
+
+                cur_w = int(JUMP_W + (1400 - JUMP_W) * t)
+                cur_h = int(JUMP_H + (1000 - JUMP_H) * t)
+
+                scaled = pygame.transform.smoothscale(card_icon, (cur_w, cur_h))
+                rect = scaled.get_rect(center=(JUMP_X + JUMP_W // 2, JUMP_Y + JUMP_H // 2))
+                screen.blit(scaled, rect)
+
+            else:
+                if not jump_started:
+                    jump_started = True
+                    pygame.mixer.stop()
+
+                    result = jump_charge_minigame.run_jump_minigame(level=jump_level)
+
+                    if result == "win":
+                        jump_level += 1
+                    else:
+                        # fall, esc, quit all count as lose and cost 1 heart
+                        apply_full_heart_damage()
+
+                    jump_cleared_this_visit = True
+                    jump_triggered = False
+                    jump_started = False
+                    restore_player_position_after_minigame()
+
+                    screen = pygame.display.set_mode((1200, 800))
+                    pygame.display.set_caption("Runner")
+
+    elif currentscene == 5:
+        screen.blit(background5, (0, 0))
+        draw_story_overlay_bottom(screen)
 
     characteranimation.draw_character(screen)
     healthbar.draw_healthbar(screen, health)
