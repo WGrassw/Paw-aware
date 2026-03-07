@@ -1,23 +1,40 @@
-# jump_charge_minigame.py
-#
-# Jumpers (Level-based)
-#
-# Rules:
-# - Level 1: 5 platforms total (including start), big and easy.
-# - Level 2: 10 platforms total, the extra 5 are smaller.
-# - Level 3: 15 platforms total, etc.
-# - Distances are random but always reachable.
-# - If you miss a platform: cat falls down fully, then game ends ("lose").
-# - Win: land on the final platform, show win message, return "win".
-#
-# Controls:
-#   Hold SPACE / Left Mouse = aim (45° line oscillates)
-#   Release = jump
-#   ESC = quit (lose)
-
 import pygame
 import random
 import math
+
+# --- CHEAT CODE (type SKIP + Enter to instantly win) ---
+CHEAT_ENABLED = True
+CHEAT_MAX_LEN = 16
+
+def handle_cheat_typing(event, cheat_buffer: str):
+    """
+    Returns: (new_buffer, cheat_action)
+    cheat_action is one of: None, "win"
+    """
+    if not CHEAT_ENABLED:
+        return cheat_buffer, None
+
+    if event.type != pygame.KEYDOWN:
+        return cheat_buffer, None
+
+    # Submit code
+    if event.key == pygame.K_RETURN:
+        code = cheat_buffer.strip().upper()
+        cheat_buffer = ""
+        if code == "SKIP":
+            return cheat_buffer, "win"
+        return cheat_buffer, None
+
+    # Edit code
+    if event.key == pygame.K_BACKSPACE:
+        return cheat_buffer[:-1], None
+
+    # Add characters
+    ch = event.unicode
+    if ch and ch.isprintable():
+        cheat_buffer += ch
+        cheat_buffer = cheat_buffer[-CHEAT_MAX_LEN:]
+    return cheat_buffer, None
 
 WIDTH, HEIGHT = 1200, 800
 FPS = 60
@@ -360,7 +377,7 @@ def run_jump_minigame(level=1):
 
     msg = "Hold SPACE to aim. Release to jump."
     tip = f"Level {int(level)}: {total_platforms} platforms. Falling ends the run."
-
+    cheat_buffer = ""
     while True:
         dt = clock.tick(FPS) / 1000.0
         t_osc += dt
@@ -372,7 +389,10 @@ def run_jump_minigame(level=1):
             if event.type == pygame.QUIT:
                 show_end_message(screen, clock, big, "You've fallen.", (255, 140, 140))
                 return "lose"
-
+            # --- CHEAT HANDLING (type SKIP + Enter) ---
+            cheat_buffer, action = handle_cheat_typing(event, cheat_buffer)
+            if action == "win":
+                return "win"
             if event.type == pygame.KEYDOWN:
                 if event.key == pygame.K_ESCAPE:
                     show_end_message(screen, clock, big, "You've fallen.", (255, 140, 140))

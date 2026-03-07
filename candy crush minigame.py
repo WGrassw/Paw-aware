@@ -1,25 +1,32 @@
 import random
 import pygame
 import math
+import os
 from collections import deque
 
 # ============================================================
-# Match-3 Fish Minigame
+# Match-3 Cat Toy Minigame
 # Entry point: run_match3_minigame(level=1) -> "win" or "lose"
 #
-# Needs files (same folder):
-#   fish blue.png
-#   fish green.png
-#   fish pink.png
-#   fish purple.png
-#   fish white.png
-#   fish yellow.png
+# Needs files (same folder as this script):
+#   cattoys1.png
+#   cattoys2.png
+#   cattoys3.png
+#   cattoys4.png
+#   cattoys5.png
+#   cattoys6.png
 #   trash bag.png
 #
 # Level rules:
-#   level 1: score >= 500, clear 20 of target fish color, dispose 3 trash
-#   level 2+: score >= 700+, clear 20 of target fish color, dispose 3 trash
+#   level 1: score >= 500, clear 20 of target toy, dispose 1 trash
+#   level 2+: score >= 700+, clear 20 of target toy, dispose 1 trash
 # ============================================================
+
+# --- CHEAT CODE (type SKIP + Enter to instantly win) ---
+CHEAT_ENABLED = True
+CHEAT_MAX_LEN = 16
+
+TRASH_GOAL = 1
 
 GRID_W, GRID_H = 8, 8
 TILE = 64
@@ -50,19 +57,57 @@ DROP_STEP_DELAY = 0.06
 CLEAR_PAUSE = 0.12
 DROP_EASING = "smooth"
 
-# Idle help: show a hint after 5 seconds without player input
+# Idle help
 IDLE_HELP_SECONDS = 5.0
-HINT_SWAP_DURATION = 0.30         # slower hint swap
+HINT_SWAP_DURATION = 0.30
 HINT_COOLDOWN_SECONDS = 2.0
 
-# Five-in-a-row skill (rainbow ball) effect
-RAINBOW_CONVERT_RATIO = 0.30      # 30% of board
-RAINBOW_STEP_SECONDS = 1.0        # stop 1 second per tile conversion
+# Rainbow effect
+RAINBOW_CONVERT_RATIO = 0.30
+RAINBOW_STEP_SECONDS = 1.0
 
 ARROW_COLOR = (255, 255, 255)
 
 BOARD_RECT = pygame.Rect(0, TOP_BAR, BOARD_W, BOARD_H)
 SIDE_RECT = pygame.Rect(BOARD_W, 0, SIDE_PANEL_W, HEIGHT)
+
+# Folder of this Python script
+SCRIPT_DIR = os.path.dirname(os.path.abspath(__file__))
+
+
+# -----------------------------
+# File helpers
+# -----------------------------
+def asset_path(filename):
+    return os.path.join(SCRIPT_DIR, filename)
+
+
+def handle_cheat_typing(event, cheat_buffer: str):
+    """
+    Returns: (new_buffer, cheat_action)
+    cheat_action is one of: None, "win"
+    """
+    if not CHEAT_ENABLED:
+        return cheat_buffer, None
+
+    if event.type != pygame.KEYDOWN:
+        return cheat_buffer, None
+
+    if event.key == pygame.K_RETURN:
+        code = cheat_buffer.strip().upper()
+        cheat_buffer = ""
+        if code == "SKIP":
+            return cheat_buffer, "win"
+        return cheat_buffer, None
+
+    if event.key == pygame.K_BACKSPACE:
+        return cheat_buffer[:-1], None
+
+    ch = event.unicode
+    if ch and ch.isprintable():
+        cheat_buffer += ch
+        cheat_buffer = cheat_buffer[-CHEAT_MAX_LEN:]
+    return cheat_buffer, None
 
 
 # -----------------------------
@@ -71,26 +116,40 @@ SIDE_RECT = pygame.Rect(BOARD_W, 0, SIDE_PANEL_W, HEIGHT)
 def make_tile(kind, color=None, extra=None):
     return (kind, color, extra)
 
-def tile_kind(t): return t[0]
-def tile_color(t): return t[1]
-def tile_extra(t): return t[2]
+
+def tile_kind(t):
+    return t[0]
+
+
+def tile_color(t):
+    return t[1]
+
+
+def tile_extra(t):
+    return t[2]
+
 
 def in_bounds(x, y):
     return 0 <= x < GRID_W and 0 <= y < GRID_H
+
 
 def are_adjacent(a, b):
     ax, ay = a
     bx, by = b
     return abs(ax - bx) + abs(ay - by) == 1
 
+
 def rand_color():
     return random.randrange(CANDY_TYPES)
+
 
 def rand_normal():
     return make_tile("normal", rand_color(), None)
 
+
 def cell_to_px(x, y):
     return x * TILE, TOP_BAR + y * TILE
+
 
 def screen_to_cell(mx, my):
     if mx < 0 or mx >= BOARD_W:
@@ -104,6 +163,7 @@ def screen_to_cell(mx, my):
         return (x, y)
     return None
 
+
 def striped_mode(extra):
     if not extra:
         return "row"
@@ -111,6 +171,7 @@ def striped_mode(extra):
     if dy != 0 and dx == 0:
         return "col"
     return "row"
+
 
 def base_match_color(tile):
     if tile is None:
@@ -120,14 +181,38 @@ def base_match_color(tile):
         return None
     return tile_color(tile)
 
+
 def swap_in_grid(grid, a, b):
     ax, ay = a
     bx, by = b
     grid[ay][ax], grid[by][bx] = grid[by][bx], grid[ay][ax]
 
 
+def is_trash_swap(grid, a, b):
+    ax, ay = a
+    bx, by = b
+    ta = grid[ay][ax]
+    tb = grid[by][bx]
+    if ta is None or tb is None:
+        return False
+    return tile_kind(ta) == "trash" or tile_kind(tb) == "trash"
+
+
+def has_any_trash_move(grid):
+    for y in range(GRID_H):
+        for x in range(GRID_W):
+            t = grid[y][x]
+            if t is None or tile_kind(t) != "trash":
+                continue
+            for dx, dy in ((1, 0), (-1, 0), (0, 1), (0, -1)):
+                nx, ny = x + dx, y + dy
+                if in_bounds(nx, ny) and grid[ny][nx] is not None:
+                    return True
+    return False
+
+
 # -----------------------------
-# Animator (neat drop, no overlap)
+# Animator
 # -----------------------------
 class Animator:
     def __init__(self):
@@ -196,19 +281,28 @@ class Animator:
 # -----------------------------
 # Loading sprites
 # -----------------------------
-def load_sprite(path):
-    img = pygame.image.load(path).convert_alpha()
+def load_sprite(filename):
+    full_path = asset_path(filename)
+    if not os.path.isfile(full_path):
+        raise FileNotFoundError(
+            f"Missing image file: '{filename}'\n"
+            f"Expected location: '{full_path}'\n"
+            f"Please put the image in the same folder as this Python file."
+        )
+    img = pygame.image.load(full_path).convert_alpha()
     return pygame.transform.smoothscale(img, (TILE - 16, TILE - 16))
 
+
 def load_assets():
-    fish = [
-        load_sprite("fish blue.png"),
-        load_sprite("fish green.png"),
-        load_sprite("fish pink.png"),
-        load_sprite("fish purple.png"),
-        load_sprite("fish white.png"),
-        load_sprite("fish yellow.png"),
+    toy_files = [
+        "cattoys1.png",
+        "cattoys2.png",
+        "cattoys3.png",
+        "cattoys4.png",
+        "cattoys5.png",
+        "cattoys6.png",
     ]
+    fish = [load_sprite(f) for f in toy_files]
     trash = load_sprite("trash bag.png")
     return fish, trash
 
@@ -255,6 +349,7 @@ def find_runs(grid):
 
     return matched, horiz_runs, vert_runs
 
+
 def make_grid_no_initial_matches():
     g = [[rand_normal() for _ in range(GRID_W)] for _ in range(GRID_H)]
     while True:
@@ -265,11 +360,11 @@ def make_grid_no_initial_matches():
             g[y][x] = rand_normal()
     return g
 
-def place_three_trash_at_top(grid):
-    cols = list(range(GRID_W))
-    random.shuffle(cols)
-    for x in cols[:3]:
-        grid[0][x] = make_tile("trash", None, None)
+
+def place_one_trash_at_top(grid):
+    x = random.randrange(GRID_W)
+    grid[0][x] = make_tile("trash", None, None)
+
 
 def trash_in_bottom_positions(grid):
     y = GRID_H - 1
@@ -280,12 +375,14 @@ def trash_in_bottom_positions(grid):
             out.append((x, y))
     return out
 
+
 def has_holes(grid):
     for y in range(GRID_H):
         for x in range(GRID_W):
             if grid[y][x] is None:
                 return True
     return False
+
 
 def special_expansion_cells_for_one_tile(grid, pos):
     x, y = pos
@@ -320,6 +417,7 @@ def special_expansion_cells_for_one_tile(grid, pos):
 
     return {pos}
 
+
 def compute_clear_set_with_specials_chain(grid, initial_cells):
     to_clear = set()
     q = deque()
@@ -350,6 +448,7 @@ def compute_clear_set_with_specials_chain(grid, initial_cells):
                     q.append(p)
     return to_clear
 
+
 def clear_cells(grid, cells):
     for (x, y) in cells:
         t = grid[y][x]
@@ -358,6 +457,7 @@ def clear_cells(grid, cells):
         if tile_kind(t) == "trash":
             continue
         grid[y][x] = None
+
 
 def choose_specials_from_matches_for_cascade(grid, horiz_runs, vert_runs):
     special_map = {}
@@ -394,7 +494,6 @@ def choose_specials_from_matches_for_cascade(grid, horiz_runs, vert_runs):
             continue
 
         if len(run) >= 5 and not placed_rainbow:
-            # Five-in-a-row generates a rainbow ball
             special_map[(cx, cy)] = make_tile("rainbow", None, None)
             protected.add((cx, cy))
             placed_rainbow = True
@@ -411,7 +510,7 @@ def choose_specials_from_matches_for_cascade(grid, horiz_runs, vert_runs):
 
 
 # -----------------------------
-# Gravity: clear first, then drop one-by-one
+# Gravity
 # -----------------------------
 def build_drop_plan(grid):
     moves = []
@@ -451,6 +550,7 @@ def build_drop_plan(grid):
 
     return new_grid, moves
 
+
 def drop_with_animation(grid, animator):
     new_grid, moves = build_drop_plan(grid)
     for y in range(GRID_H):
@@ -461,7 +561,7 @@ def drop_with_animation(grid, animator):
 
 
 # -----------------------------
-# Trash disposal when reaching bottom
+# Trash disposal
 # -----------------------------
 def dispose_bottom_trash(grid, animator):
     disposed = 0
@@ -483,13 +583,14 @@ def dispose_bottom_trash(grid, animator):
 
 
 # -----------------------------
-# Move availability + shuffle (keeps trash fixed)
+# Move availability + shuffle
 # -----------------------------
 def is_match_after_swap(grid, a, b):
     swap_in_grid(grid, a, b)
     matched, _, _ = find_runs(grid)
     swap_in_grid(grid, a, b)
     return bool(matched)
+
 
 def find_any_valid_move(grid):
     for y in range(GRID_H):
@@ -498,26 +599,32 @@ def find_any_valid_move(grid):
             t = grid[y][x]
             if t is None:
                 continue
-            if tile_kind(t) in ("trash", "rainbow"):
-                continue
 
             if x + 1 < GRID_W:
                 b = (x + 1, y)
                 tb = grid[y][x + 1]
-                if tb is not None and tile_kind(tb) not in ("trash", "rainbow"):
-                    if is_match_after_swap(grid, a, b):
+                if tb is not None:
+                    if tile_kind(t) == "trash" or tile_kind(tb) == "trash":
                         return (a, b)
+                    if tile_kind(t) not in ("rainbow",) and tile_kind(tb) not in ("rainbow",):
+                        if is_match_after_swap(grid, a, b):
+                            return (a, b)
 
             if y + 1 < GRID_H:
                 b = (x, y + 1)
                 tb = grid[y + 1][x]
-                if tb is not None and tile_kind(tb) not in ("trash", "rainbow"):
-                    if is_match_after_swap(grid, a, b):
+                if tb is not None:
+                    if tile_kind(t) == "trash" or tile_kind(tb) == "trash":
                         return (a, b)
+                    if tile_kind(t) not in ("rainbow",) and tile_kind(tb) not in ("rainbow",):
+                        if is_match_after_swap(grid, a, b):
+                            return (a, b)
     return None
+
 
 def has_any_valid_move(grid):
     return find_any_valid_move(grid) is not None
+
 
 def shuffle_board_keep_trash(grid):
     trash_positions = {}
@@ -547,16 +654,17 @@ def shuffle_board_keep_trash(grid):
         matched, _, _ = find_runs(grid)
         if matched:
             continue
-        if has_any_valid_move(grid):
+
+        # valid if either a normal match move exists or trash can still be moved
+        if has_any_valid_move(grid) or has_any_trash_move(grid):
             return True
     return False
 
 
 # -----------------------------
-# Idle-help hint animation
+# Hint animation
 # -----------------------------
 def play_hint_swap_animation(grid, animator, move):
-    """Visual hint only. Does not change grid."""
     if move is None:
         return
     a, b = move
@@ -575,7 +683,7 @@ def play_hint_swap_animation(grid, animator, move):
 
 
 # -----------------------------
-# Rainbow ball (five-in-a-row) staged effect
+# Rainbow effect
 # -----------------------------
 def clone_tile_as_template(template_tile):
     k = tile_kind(template_tile)
@@ -587,14 +695,8 @@ def clone_tile_as_template(template_tile):
         return make_tile("bomb", tile_color(template_tile), None)
     return None
 
+
 def build_rainbow_plan(grid, rainbow_pos, other_pos):
-    """
-    Returns a dict describing a staged plan:
-      - template tile (from other_pos)
-      - chosen positions (30% of board, excluding trash/rainbow)
-      - mode: 'normal' or 'special'
-    Does not mutate the grid.
-    """
     ox, oy = other_pos
     template = grid[oy][ox]
     if template is None or tile_kind(template) in ("trash", "rainbow"):
@@ -625,7 +727,6 @@ def build_rainbow_plan(grid, rainbow_pos, other_pos):
     if mode == "unsupported":
         return None
 
-    # We also want to clear the rainbow and the swapped-with tile at the end
     return {
         "rainbow_pos": rainbow_pos,
         "other_pos": other_pos,
@@ -654,8 +755,6 @@ def wrap_text(text, max_width, fnt):
         lines.append(cur)
     return lines
 
-def task_color(done):
-    return DONE_GREEN if done else SUBTEXT
 
 def draw_special_overlay(surf, tile, rect):
     k = tile_kind(tile)
@@ -674,46 +773,41 @@ def draw_special_overlay(surf, tile, rect):
         pygame.draw.circle(surf, (20, 20, 20), (cx, cy), rect.w // 6)
         pygame.draw.circle(surf, (255, 170, 0), (cx + 10, cy - 10), 5)
 
+
 def draw_rainbow_ball(surf, rect):
-    """
-    Draw a rainbow ball inside rect.
-    Uses 6 colored arcs to look like a rainbow sphere.
-    """
     cx, cy = rect.center
     r = min(rect.w, rect.h) // 2 - 2
 
-    # base shadow
     pygame.draw.circle(surf, (18, 20, 26), (cx, cy), r + 2)
 
     colors = [
-        (255, 80, 80),    # red
-        (255, 170, 60),   # orange
-        (255, 240, 90),   # yellow
-        (80, 220, 120),   # green
-        (90, 160, 255),   # blue
-        (190, 120, 255),  # purple
+        (255, 80, 80),
+        (255, 170, 60),
+        (255, 240, 90),
+        (80, 220, 120),
+        (90, 160, 255),
+        (190, 120, 255),
     ]
 
     thickness = max(3, r // 3)
     arc_rect = pygame.Rect(cx - r, cy - r, 2 * r, 2 * r)
 
-    # Draw arcs in different angle ranges
     step = (2 * math.pi) / len(colors)
     for i, col in enumerate(colors):
         start = i * step
         end = (i + 1) * step
         pygame.draw.arc(surf, col, arc_rect, start, end, thickness)
 
-    # inner highlight
     pygame.draw.circle(surf, (255, 255, 255), (cx - r // 3, cy - r // 3), max(2, r // 6))
-    # outline
     pygame.draw.circle(surf, (0, 0, 0), (cx, cy), r, 2)
+
 
 def draw_tile(surf, fish_sprites, trash_sprite, tile, px, py):
     rect = pygame.Rect(px + 8, py + 8, TILE - 16, TILE - 16)
     k = tile_kind(tile)
 
     if k == "trash":
+        pygame.draw.rect(surf, (255, 255, 255), rect, border_radius=10)
         surf.blit(trash_sprite, rect.topleft)
         pygame.draw.rect(surf, (0, 0, 0), rect, 2, border_radius=10)
         return
@@ -727,7 +821,8 @@ def draw_tile(surf, fish_sprites, trash_sprite, tile, px, py):
         draw_special_overlay(surf, tile, rect)
     pygame.draw.rect(surf, (0, 0, 0), rect, 2, border_radius=10)
 
-def draw_tasks_panel(surface, font, score, score_goal, cleared_color_count, color_goal, color_name, trash_disposed, trash_total=3):
+
+def draw_tasks_panel(surface, font, score, score_goal, cleared_color_count, color_goal, color_name, trash_disposed, trash_total=TRASH_GOAL):
     panel_x = BOARD_W + 14
     panel_y = 14
     panel_w = SIDE_PANEL_W - 28
@@ -746,7 +841,7 @@ def draw_tasks_panel(surface, font, score, score_goal, cleared_color_count, colo
     lines = [
         (f"Task 1: Reach {score_goal} score", f"({min(score, score_goal)}/{score_goal})", t1),
         (f"Task 2: Clear {color_goal} {color_name}", f"({min(cleared_color_count, color_goal)}/{color_goal})", t2),
-        ("Task 3: Move trash bags to bottom", f"({min(trash_disposed, trash_total)}/{trash_total})", t3),
+        ("Task 3: Move trash bag to bottom", f"({min(trash_disposed, trash_total)}/{trash_total})", t3),
     ]
 
     y = rect.y + 42
@@ -759,6 +854,7 @@ def draw_tasks_panel(surface, font, score, score_goal, cleared_color_count, colo
     y += 10
     tip = "No moves => shuffle. Press ESC to exit."
     surface.blit(font.render(tip, True, SUBTEXT), (rect.x + 12, y))
+
 
 def draw_all(screen, fish_sprites, trash_sprite, font, big, grid, selected, score, message,
              animator, cleared_set, score_goal, cleared_color_count, color_goal, color_name,
@@ -776,7 +872,17 @@ def draw_all(screen, fish_sprites, trash_sprite, font, big, grid, selected, scor
         y += 24
 
     pygame.draw.rect(screen, (10, 12, 16), SIDE_RECT)
-    draw_tasks_panel(screen, font, score, score_goal, cleared_color_count, color_goal, color_name, trash_disposed, trash_total=3)
+    draw_tasks_panel(
+        screen,
+        font,
+        score,
+        score_goal,
+        cleared_color_count,
+        color_goal,
+        color_name,
+        trash_disposed,
+        trash_total=TRASH_GOAL
+    )
 
     prev_clip = screen.get_clip()
     screen.set_clip(BOARD_RECT)
@@ -812,21 +918,21 @@ def draw_all(screen, fish_sprites, trash_sprite, font, big, grid, selected, scor
 
 
 # -----------------------------
-# Public entry point
+# Main game
 # -----------------------------
 def run_match3_minigame(level=1):
     score_goal = 500 + (max(0, level - 1) * 200)
     color_goal = 20
 
     if level <= 1:
-        target_color = 5  # Yellow
+        target_color = 5
     else:
         choices = [0, 1, 2, 3, 4, 5]
         if 5 in choices:
             choices.remove(5)
         target_color = random.choice(choices)
 
-    color_names = ["Blue", "Green", "Pink", "Purple", "White", "Yellow"]
+    color_names = ["Toy 1", "Toy 2", "Toy 3", "Toy 4", "Toy 5", "Toy 6"]
     color_name = color_names[target_color]
 
     screen = pygame.display.set_mode((WIDTH, HEIGHT))
@@ -839,7 +945,7 @@ def run_match3_minigame(level=1):
     fish_sprites, trash_sprite = load_assets()
 
     grid = make_grid_no_initial_matches()
-    place_three_trash_at_top(grid)
+    place_one_trash_at_top(grid)
 
     animator = Animator()
 
@@ -848,7 +954,7 @@ def run_match3_minigame(level=1):
     cleared_target_color = 0
     trash_disposed = 0
 
-    message = f"Level {level}: Clear {color_goal} {color_name}, reach {score_goal}, dispose 3 trash."
+    message = f"Level {level}: Clear {color_goal} {color_name}, reach {score_goal}, dispose {TRASH_GOAL} trash."
     cleared_set = set()
 
     state = "idle"
@@ -857,27 +963,25 @@ def run_match3_minigame(level=1):
 
     pause_timer = 0.0
 
-    # idle help timers
     idle_seconds = 0.0
     hint_cooldown = 0.0
 
-    # rainbow staged plan state
     rainbow_plan = None
     rainbow_queue = []
     rainbow_step_timer = 0.0
-    rainbow_converted = []  # positions converted (for final clear)
+    rainbow_converted = []
     rainbow_message_prefix = ""
 
     running = True
+    cheat_buffer = ""
+
     while running:
         dt = clock.tick(FPS) / 1000.0
         animator.update(dt)
 
-        # Win condition
-        if score >= score_goal and cleared_target_color >= color_goal and trash_disposed >= 3:
+        if score >= score_goal and cleared_target_color >= color_goal and trash_disposed >= TRASH_GOAL:
             return "win"
 
-        # Idle tracking (no input, no animations, and we are idle)
         if state == "idle" and (not animator.is_busy()):
             idle_seconds += dt
         else:
@@ -886,31 +990,37 @@ def run_match3_minigame(level=1):
         if hint_cooldown > 0.0:
             hint_cooldown -= dt
 
-        # Auto hint after 5 seconds of no input
         if state == "idle" and (not animator.is_busy()) and hint_cooldown <= 0.0:
             if idle_seconds >= IDLE_HELP_SECONDS:
                 mv = find_any_valid_move(grid)
                 if mv is not None:
                     play_hint_swap_animation(grid, animator, mv)
-                    message = "Hint: try swapping the highlighted pair."
+                    if is_trash_swap(grid, mv[0], mv[1]):
+                        message = "Hint: you can move the trash bag by swapping it with a neighbor."
+                    else:
+                        message = "Hint: try swapping the highlighted pair."
                     idle_seconds = 0.0
                     hint_cooldown = HINT_COOLDOWN_SECONDS
 
-        # Input
         for event in pygame.event.get():
             if event.type == pygame.QUIT:
                 return "lose"
+
             if event.type == pygame.KEYDOWN:
                 if event.key == pygame.K_ESCAPE:
                     return "lose"
 
+            cheat_buffer, action = handle_cheat_typing(event, cheat_buffer)
+            if action == "win":
+                return "win"
+
             if event.type == pygame.MOUSEBUTTONDOWN and event.button == 1:
-                # Any click resets idle timers
                 idle_seconds = 0.0
                 hint_cooldown = 0.0
 
                 if state != "idle" or animator.is_busy():
                     continue
+
                 cell = screen_to_cell(*event.pos)
                 if cell is None:
                     continue
@@ -928,10 +1038,8 @@ def run_match3_minigame(level=1):
                         ta = grid[ay][ax]
                         tb = grid[by][bx]
 
-                        # Disallow swapping trash
-                        if ta is None or tb is None or tile_kind(ta) == "trash" or tile_kind(tb) == "trash":
+                        if ta is None or tb is None:
                             selected = None
-                            message = "Cannot swap trash."
                             continue
 
                         a_px = cell_to_px(ax, ay)
@@ -946,15 +1054,17 @@ def run_match3_minigame(level=1):
                     else:
                         selected = cell
 
-        # Swap finished
         if state == "swapping" and not animator.is_busy():
             ax, ay = swap_a
             bx, by = swap_b
             ta = grid[ay][ax]
             tb = grid[by][bx]
 
-            # 1) rainbow ball swap effect has highest priority
-            if (ta is not None and tile_kind(ta) == "rainbow") or (tb is not None and tile_kind(tb) == "rainbow"):
+            if is_trash_swap(grid, swap_a, swap_b):
+                state = "resolving"
+                pause_timer = 0.0
+                message = "Trash moved."
+            elif (ta is not None and tile_kind(ta) == "rainbow") or (tb is not None and tile_kind(tb) == "rainbow"):
                 if ta is not None and tile_kind(ta) == "rainbow":
                     rainbow_pos = (ax, ay)
                     other_pos = (bx, by)
@@ -964,14 +1074,12 @@ def run_match3_minigame(level=1):
 
                 plan = build_rainbow_plan(grid, rainbow_pos, other_pos)
                 if plan is None:
-                    # fallback: treat as normal swap resolution
                     matched, _, _ = find_runs(grid)
                     if matched:
                         state = "resolving"
                         pause_timer = 0.0
                         message = "Good move."
                     else:
-                        # revert swap
                         a_px = cell_to_px(ax, ay)
                         b_px = cell_to_px(bx, by)
                         animator.add_swap(grid[ay][ax], a_px, b_px, SWAP_DURATION)
@@ -980,30 +1088,27 @@ def run_match3_minigame(level=1):
                         state = "idle"
                         message = "No match. Swap reverted."
                 else:
-                    # start staged conversion
                     rainbow_plan = plan
                     rainbow_queue = plan["chosen"][:]
-                    random.shuffle(rainbow_queue)  # optional: random order
+                    random.shuffle(rainbow_queue)
                     rainbow_step_timer = 0.0
                     rainbow_converted = []
                     templ = plan["template"]
                     k = tile_kind(templ)
                     if k == "normal":
-                        rainbow_message_prefix = "Rainbow: converting tiles to a fish..."
+                        rainbow_message_prefix = "Rainbow: converting tiles to a toy..."
                     else:
                         rainbow_message_prefix = "Rainbow: converting tiles to a skill..."
                     message = rainbow_message_prefix
                     state = "rainbow_converting"
 
             else:
-                # 2) normal match flow
                 matched, _, _ = find_runs(grid)
                 if matched:
                     state = "resolving"
                     pause_timer = 0.0
                     message = "Good move."
                 else:
-                    # revert swap
                     a_px = cell_to_px(ax, ay)
                     b_px = cell_to_px(bx, by)
                     animator.add_swap(grid[ay][ax], a_px, b_px, SWAP_DURATION)
@@ -1012,7 +1117,6 @@ def run_match3_minigame(level=1):
                     state = "idle"
                     message = "No match. Swap reverted."
 
-        # Staged rainbow conversion: convert one tile, then pause 1 second
         if state == "rainbow_converting":
             if animator.is_busy():
                 pass
@@ -1025,7 +1129,6 @@ def run_match3_minigame(level=1):
                         x, y = rainbow_queue.pop(0)
                         templ = rainbow_plan["template"]
 
-                        # Convert this tile now
                         if tile_kind(templ) == "normal":
                             grid[y][x] = make_tile("normal", tile_color(templ), None)
                         else:
@@ -1034,24 +1137,19 @@ def run_match3_minigame(level=1):
                         rainbow_converted.append((x, y))
                         message = f"{rainbow_message_prefix} ({len(rainbow_converted)}/{len(rainbow_plan['chosen'])})"
                     else:
-                        # Conversion finished, now apply elimination/activation
                         templ = rainbow_plan["template"]
                         rainbow_pos = rainbow_plan["rainbow_pos"]
                         other_pos = rainbow_plan["other_pos"]
 
                         if tile_kind(templ) == "normal":
-                            # Clear converted set plus rainbow and other
                             clear_set = set(rainbow_converted)
                             clear_set.add(rainbow_pos)
                             clear_set.add(other_pos)
-
                         else:
-                            # For special tiles, activate via chain expansion starting from converted set
                             clear_set = compute_clear_set_with_specials_chain(grid, set(rainbow_converted))
                             clear_set.add(rainbow_pos)
                             clear_set.add(other_pos)
 
-                        # Count target hits BEFORE clearing
                         target_hits = 0
                         for (cx, cy) in clear_set:
                             t = grid[cy][cx]
@@ -1072,7 +1170,6 @@ def run_match3_minigame(level=1):
                         message = f"Rainbow activated: cleared {len(clear_set)} (+{score_delta})"
                         pause_timer = CLEAR_PAUSE
 
-                        # reset rainbow state
                         rainbow_plan = None
                         rainbow_queue = []
                         rainbow_converted = []
@@ -1080,7 +1177,6 @@ def run_match3_minigame(level=1):
 
                         state = "resolving"
 
-        # Resolving
         if state == "resolving":
             if pause_timer > 0.0:
                 pause_timer -= dt
@@ -1089,20 +1185,17 @@ def run_match3_minigame(level=1):
             elif animator.is_busy():
                 pass
             else:
-                # 1) dispose trash at bottom
                 disposed_now = dispose_bottom_trash(grid, animator)
                 if disposed_now > 0:
                     trash_disposed += disposed_now
-                    message = f"Trash disposed: {trash_disposed}/3"
+                    message = f"Trash disposed: {trash_disposed}/{TRASH_GOAL}"
                 else:
-                    # 2) clear matches (count target BEFORE clearing)
                     matched, horiz_runs, vert_runs = find_runs(grid)
                     if matched:
                         special_map, protected = choose_specials_from_matches_for_cascade(grid, horiz_runs, vert_runs)
                         matched_to_clear = set(matched) - set(protected)
                         expanded = compute_clear_set_with_specials_chain(grid, matched_to_clear)
 
-                        # Count target color before clearing
                         target_hits = 0
                         for (x, y) in expanded:
                             t = grid[y][x]
@@ -1113,7 +1206,6 @@ def run_match3_minigame(level=1):
                             if tile_color(t) == target_color:
                                 target_hits += 1
 
-                        # Place specials, then clear
                         for (x, y), new_tile in special_map.items():
                             if grid[y][x] is not None and tile_kind(grid[y][x]) == "trash":
                                 continue
@@ -1130,12 +1222,10 @@ def run_match3_minigame(level=1):
                         pause_timer = CLEAR_PAUSE
 
                     else:
-                        # 3) gravity if holes exist
                         if has_holes(grid):
                             drop_with_animation(grid, animator)
                         else:
-                            # 4) no matches and no holes => check moves or shuffle
-                            if not has_any_valid_move(grid):
+                            if not has_any_valid_move(grid) and not has_any_trash_move(grid):
                                 message = "No moves available. Shuffling..."
                                 ok = shuffle_board_keep_trash(grid)
                                 if not ok:
@@ -1165,7 +1255,6 @@ def run_match3_minigame(level=1):
     return "lose"
 
 
-# Optional quick test runner:
 if __name__ == "__main__":
     pygame.init()
     try:

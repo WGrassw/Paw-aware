@@ -3,6 +3,39 @@ import random
 import pygame
 import math
 
+# --- CHEAT CODE (type SKIP + Enter to instantly win) ---
+CHEAT_ENABLED = True
+CHEAT_MAX_LEN = 16
+
+def handle_cheat_typing(event, cheat_buffer: str):
+    """
+    Returns: (new_buffer, cheat_action)
+    cheat_action is one of: None, "win"
+    """
+    if not CHEAT_ENABLED:
+        return cheat_buffer, None
+
+    if event.type != pygame.KEYDOWN:
+        return cheat_buffer, None
+
+    # Submit code
+    if event.key == pygame.K_RETURN:
+        code = cheat_buffer.strip().upper()
+        cheat_buffer = ""
+        if code == "SKIP":
+            return cheat_buffer, "win"
+        return cheat_buffer, None
+
+    # Edit code
+    if event.key == pygame.K_BACKSPACE:
+        return cheat_buffer[:-1], None
+
+    # Add characters
+    ch = event.unicode
+    if ch and ch.isprintable():
+        cheat_buffer += ch
+        cheat_buffer = cheat_buffer[-CHEAT_MAX_LEN:]
+    return cheat_buffer, None
 
 def run_maze_minigame(window_size=(1200, 800), caption="Maze Minigame", level=1):
     WINDOW_W, WINDOW_H = window_size
@@ -284,7 +317,7 @@ def run_maze_minigame(window_size=(1200, 800), caption="Maze Minigame", level=1)
 
     # Timer start
     start_ms = pygame.time.get_ticks()
-
+    cheat_buffer = ""
     # =========================
     # Loop
     # =========================
@@ -297,6 +330,11 @@ def run_maze_minigame(window_size=(1200, 800), caption="Maze Minigame", level=1)
         for event in pygame.event.get():
             if event.type == pygame.QUIT:
                 return "lose"
+
+            # --- CHEAT HANDLING (MUST BE INSIDE THIS LOOP) ---
+            cheat_buffer, action = handle_cheat_typing(event, cheat_buffer)
+            if action == "win":
+                return "win"
 
         keys = pygame.key.get_pressed()
         if keys[pygame.K_ESCAPE]:

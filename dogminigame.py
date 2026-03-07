@@ -30,6 +30,40 @@ FISH_PICKUP_RADIUS_BASE = 50
 # HELPER FUNCTIONS
 # ----------------------------------
 
+# --- CHEAT CODE (type SKIP + Enter to instantly win) ---
+CHEAT_ENABLED = True
+CHEAT_MAX_LEN = 16
+
+def handle_cheat_typing(event, cheat_buffer: str):
+    """
+    Returns: (new_buffer, cheat_action)
+    cheat_action is one of: None, "win"
+    """
+    if not CHEAT_ENABLED:
+        return cheat_buffer, None
+
+    if event.type != pygame.KEYDOWN:
+        return cheat_buffer, None
+
+    # Submit code
+    if event.key == pygame.K_RETURN:
+        code = cheat_buffer.strip().upper()
+        cheat_buffer = ""
+        if code == "SKIP":
+            return cheat_buffer, "win"
+        return cheat_buffer, None
+
+    # Edit code
+    if event.key == pygame.K_BACKSPACE:
+        return cheat_buffer[:-1], None
+
+    # Add characters
+    ch = event.unicode
+    if ch and ch.isprintable():
+        cheat_buffer += ch
+        cheat_buffer = cheat_buffer[-CHEAT_MAX_LEN:]
+    return cheat_buffer, None
+
 def distance(a, b):
     ax, ay = a.center
     bx, by = b.center
@@ -312,7 +346,9 @@ def run_dog_minigame(level: int) -> str:
     waiting = False
     choices = {1: "rock", 2: "paper", 3: "scissors"}
     running = True
+    cheat_buffer = ""
     while running:
+
         dt = clock.tick(60)
 
         # Events
@@ -320,7 +356,11 @@ def run_dog_minigame(level: int) -> str:
             if event.type == pygame.QUIT:
                 pygame.quit()
                 raise SystemExit
-
+            # --- CHEAT HANDLING ---
+            cheat_buffer, action = handle_cheat_typing(event, cheat_buffer)
+            if action == "win":
+                return "win"
+            
             if waiting and event.type == pygame.KEYDOWN and event.key == pygame.K_RETURN:
                 running = False
 
